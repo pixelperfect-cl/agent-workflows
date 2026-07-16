@@ -1,0 +1,144 @@
+# Agente de tickets de Pixel Perfect (F6 Fase B). Lo invocan los stubs
+# `pixelperfect-agent.yml` de cada repo cliente vía workflow_call; el hub
+# (admin.pixelperfect.cl) dispara esos stubs con workflow_dispatch al aprobar
+# el plan IA de un ticket.
+#
+# REGLA DE ORO: el agente jamás toca la rama base ni deploya; su único
+# entregable es un Pull Request. El deploy a producción SIEMPRE pasa por humano.
+name: Agente de tickets (reutilizable)
+
+on:
+  workflow_call:
+    inputs:
+      ticket_id:
+        description: "UUID del ticket en el hub"
+        required: true
+        type: string
+      dispatch_id:
+        description: "UUID de correlación generado por el hub"
+        required: true
+        type: string
+      prompt:
+        description: "Ticket + plan aprobado, renderizado por el hub"
+        required: true
+        type: string
+      callback_url:
+        description: "POST del hub que recibe inicio y resultado"
+        required: true
+        type: string
+      base_branch:
+        description: "Rama base del PR"
+        required: false
+        type: string
+        default: main
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      AGENT_CALLBACK_SECRET:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Un run por ticket a la vez (el hub también bloquea re-despachos en curso).
+concurrency:
+  group: pixelperfect-agent-${{ inputs.ticket_id }}
+  cancel-in-progress: false
+
+jobs:
+  agente:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TICKET_ID: ${{ inputs.ticket_id }}
+      DISPATCH_ID: ${{ inputs.dispatch_id }}
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # Sufijo run_number: los re-despachos no chocan con la rama del run anterior.
+      - name: Derivar rama de trabajo
+        id: branch
+        run: |
+          echo "short=${TICKET_ID:0:8}" >> "$GITHUB_OUTPUT"
+          echo "name=ticket/${TICKET_ID:0:8}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      # Correlación temprana: el hub pasa a "corriendo" y guarda el runUrl sin
+      # necesidad de poll (workflow_dispatch no devuelve run id).
+      - name: Avisar inicio al hub
+        continue-on-error: true
+        run: |
+          jq -n --arg event started --arg ticketId "$TICKET_ID" \
+                --arg dispatchId "$DISPATCH_ID" --arg runUrl "$RUN_URL" \
+                '{event:$event,ticketId:$ticketId,dispatchId:$dispatchId,runUrl:$runUrl}' \
+          | curl -sS --max-time 20 -X POST "$CALLBACK_URL" \
+              -H "Authorization: Bearer ${{ secrets.AGENT_CALLBACK_SECRET }}" \
+              -H "Content-Type: application/json" --data @-
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+          fetch-depth: 0
+
+      # continue-on-error: el step de reporte SIEMPRE corre y clasifica.
+      - name: Ejecutar Claude Code
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            ${{ inputs.prompt }}
+
+            ---
+            REGLAS OBLIGATORIAS DEL RUNNER (Pixel Perfect):
+            1. Crea la rama `${{ steps.branch.outputs.name }}` desde `${{ inputs.base_branch }}` y trabaja SOLO en ella. JAMÁS hagas push a `${{ inputs.base_branch }}` ni a main.
+            2. Tu único entregable es UN Pull Request de esa rama hacia `${{ inputs.base_branch }}`, creado con `gh pr create`. Título: "[Ticket ${{ steps.branch.outputs.short }}] <resumen corto>". Cuerpo en español de Chile: qué cambió, por qué, y cómo probarlo.
+            3. NO ejecutes deploys ni scripts de publicación; no toques credenciales, servicios externos ni configuración de producción. Nada destructivo (sin rm -rf, sin migraciones destructivas).
+            4. Si el ticket no requiere cambios de código o no puedes resolverlo con confianza, NO abras PR y termina explicando el motivo.
+            5. Cambios mínimos y enfocados al ticket; respeta las convenciones del repo (lee CLAUDE.md / AGENTS.md si existen).
+          claude_args: '--max-turns 60 --allowedTools "Edit,Write,Read,Glob,Grep,WebFetch,Bash(git:*),Bash(gh pr create:*),Bash(gh pr list:*),Bash(npm ci),Bash(npm run:*),Bash(npx:*),Bash(composer:*),Bash(php:*)"'
+
+      # Clasificación determinista + failure path: corre SIEMPRE.
+      # PR abierto => ok; agente ok sin PR => sin_cambios; agente falló => error.
+      - name: Reportar resultado al hub
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          PR_JSON=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
+            --state open --json number,url --jq '.[0] // empty' 2>/dev/null || true)
+          if [ -n "$PR_JSON" ]; then
+            STATUS="ok"
+            PR_URL=$(echo "$PR_JSON" | jq -r '.url')
+            PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
+          elif [ "$CLAUDE_OUTCOME" = "success" ]; then
+            STATUS="sin_cambios"
+          else
+            STATUS="error"
+          fi
+          # Último mensaje del agente como resumen (best-effort: el formato del
+          # execution_file puede cambiar entre versiones del action).
+          SUMMARY=""
+          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+            SUMMARY=$(jq -r '[.[] | select(.type == "assistant")] | last
+              | .message.content[]? | select(.type == "text") | .text' \
+              "$EXECUTION_FILE" 2>/dev/null | head -c 3500 || true)
+          fi
+          jq -n --arg event completed --arg ticketId "$TICKET_ID" \
+                --arg dispatchId "$DISPATCH_ID" --arg status "$STATUS" \
+                --arg branch "$BRANCH" --arg runUrl "$RUN_URL" \
+                --arg prUrl "${PR_URL:-}" --arg prNumber "${PR_NUMBER:-}" \
+                --arg resumen "$SUMMARY" \
+                '{event:$event,ticketId:$ticketId,dispatchId:$dispatchId,
+                  status:$status,branch:$branch,runUrl:$runUrl}
+                 + (if $prUrl != "" then {prUrl:$prUrl,prNumber:($prNumber|tonumber)} else {} end)
+                 + (if $resumen != "" then {resumen:$resumen} else {} end)' \
+          | curl -sS --max-time 20 -X POST "$CALLBACK_URL" \
+              -H "Authorization: Bearer ${{ secrets.AGENT_CALLBACK_SECRET }}" \
+              -H "Content-Type: application/json" --data @-

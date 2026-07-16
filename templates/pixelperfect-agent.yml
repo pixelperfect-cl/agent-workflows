@@ -1,0 +1,48 @@
+# Stub del agente de tickets de Pixel Perfect. El hub dispara este workflow
+# vía workflow_dispatch; TODA la lógica vive en el reutilizable central
+# (pixelperfect-cl/agent-workflows). No editar acá: actualizar allá.
+#
+# Onboarding: copiar este archivo a .github/workflows/pixelperfect-agent.yml
+# en la rama default del repo del cliente (el nombre del archivo es la
+# convención que usa el hub: no renombrarlo).
+name: Agente Pixel Perfect
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket_id:
+        description: "UUID del ticket"
+        required: true
+        type: string
+      dispatch_id:
+        description: "UUID de correlación del hub"
+        required: true
+        type: string
+      prompt:
+        description: "Ticket + plan aprobado"
+        required: true
+        type: string
+      callback_url:
+        description: "Endpoint de callback del hub"
+        required: true
+        type: string
+      base_branch:
+        description: "Rama base del PR"
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  agente:
+    uses: pixelperfect-cl/agent-workflows/.github/workflows/ticket-agent.yml@main
+    with:
+      ticket_id: ${{ inputs.ticket_id }}
+      dispatch_id: ${{ inputs.dispatch_id }}
+      prompt: ${{ inputs.prompt }}
+      callback_url: ${{ inputs.callback_url }}
+      base_branch: ${{ inputs.base_branch }}
+    secrets: inherit
