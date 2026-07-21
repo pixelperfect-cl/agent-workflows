@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: main
+      model:
+        description: "Modelo de Claude (vacío = default de la suscripción)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -45,4 +50,5 @@ jobs:
       prompt: ${{ inputs.prompt }}
       callback_url: ${{ inputs.callback_url }}
       base_branch: ${{ inputs.base_branch }}
+      model: ${{ inputs.model }}
     secrets: inherit

@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: main
+      model:
+        description: "Modelo de Claude para el run (vacío = default de la suscripción)"
+        required: false
+        type: string
+        default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -99,7 +104,12 @@ jobs:
             3. NO ejecutes deploys ni scripts de publicación; no toques credenciales, servicios externos ni configuración de producción. Nada destructivo (sin rm -rf, sin migraciones destructivas).
             4. Si el ticket no requiere cambios de código o no puedes resolverlo con confianza, NO abras PR y termina explicando el motivo.
             5. Cambios mínimos y enfocados al ticket; respeta las convenciones del repo (lee CLAUDE.md / AGENTS.md si existen).
-          claude_args: '--max-turns 60 --allowedTools "Edit,Write,Read,Glob,Grep,WebFetch,Bash(git:*),Bash(gh pr create:*),Bash(gh pr list:*),Bash(npm ci),Bash(npm run:*),Bash(npx:*),Bash(composer:*),Bash(php:*)"'
+          # El modelo lo fija el hub (Configuración → Agente IA); vacío = no
+          # pasar --model y usar el default de la suscripción.
+          claude_args: >-
+            --max-turns 60
+            --allowedTools "Edit,Write,Read,Glob,Grep,WebFetch,Bash(git:*),Bash(gh pr create:*),Bash(gh pr list:*),Bash(npm ci),Bash(npm run:*),Bash(npx:*),Bash(composer:*),Bash(php:*)"
+            ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
 
       # Clasificación determinista + failure path: corre SIEMPRE.
       # PR abierto => ok; agente ok sin PR => sin_cambios; agente falló => error.
