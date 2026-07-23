@@ -1,0 +1,52 @@
+# Captura de pantalla del deploy (F3). El hub (admin.pixelperfect.cl) lo dispara
+# vía workflow_dispatch al iniciar el deploy (phase=before) y al terminarlo
+# (phase=after): saca foto de una URL PÚBLICA y la reporta al callback del hub
+# como adjunto INTERNA del ticket. NO hace checkout de repos de clientes ni toca
+# Cloudways — solo navega una URL, así que es genérico para cualquier stack.
+#
+# Requiere el secret AGENT_CALLBACK_SECRET en este repo (mismo valor que el hub).
+name: Captura de pantalla (deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL pública a capturar"
+        required: true
+        type: string
+      phase:
+        description: "before | after"
+        required: true
+        type: string
+      ticket_id:
+        description: "UUID del ticket"
+        required: true
+        type: string
+      dispatch_id:
+        description: "UUID de correlación del hub"
+        required: true
+        type: string
+      callback_url:
+        description: "Endpoint de callback del hub"
+        required: true
+        type: string
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Instalar puppeteer (descarga Chromium)
+        run: npm install puppeteer@23
+      - name: Capturar y reportar al hub
+        env:
+          CALLBACK_SECRET: ${{ secrets.AGENT_CALLBACK_SECRET }}
+          TARGET_URL: ${{ inputs.url }}
+          PHASE: ${{ inputs.phase }}
+          TICKET_ID: ${{ inputs.ticket_id }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          CALLBACK_URL: ${{ inputs.callback_url }}
+        run: node scripts/capture.mjs
