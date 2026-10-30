@@ -30,6 +30,11 @@ on:
         description: "Endpoint de callback del hub"
         required: true
         type: string
+      selector:
+        description: "Selector CSS de la zona a capturar (opcional; vacío = primera pantalla)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   capture:
@@ -49,4 +54,5 @@ jobs:
           TICKET_ID: ${{ inputs.ticket_id }}
           DISPATCH_ID: ${{ inputs.dispatch_id }}
           CALLBACK_URL: ${{ inputs.callback_url }}
+          SELECTOR: ${{ inputs.selector }}
         run: node scripts/capture.mjs
