@@ -156,6 +156,10 @@ async function main() {
   });
   try {
     const page = await browser.newPage();
+    // «pixelperfect-agente» en el User-Agent: la regla de Cloudflare que desafía a
+    // las redes de datacenter (este runner corre en Azure) lo deja pasar. Sin esto
+    // la captura sale con el «Verify you are human» en vez del sitio.
+    await page.setUserAgent(`${await browser.userAgent()} pixelperfect-agente`);
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
     await page.goto(TARGET_URL, { waitUntil: "networkidle2", timeout: 45000 });
     // Respiro para fuentes/animaciones antes de la foto.
