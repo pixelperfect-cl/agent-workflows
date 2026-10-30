@@ -98,6 +98,7 @@ async function dismissOverlays(page) {
 // elemento no existe / no es visible / el selector es inválido: la primera
 // pantalla, como siempre.
 const MARGEN = 24;
+const MAX_ALTO = 2000;
 async function tomarCaptura(page) {
   const sel = (SELECTOR || "").trim();
   if (sel) {
@@ -123,7 +124,9 @@ async function tomarCaptura(page) {
           const x = Math.max(0, box.x - MARGEN);
           const y = Math.max(0, box.y - MARGEN);
           const w = Math.min(box.pw, box.x + box.width + MARGEN) - x;
-          const h = Math.min(box.ph, box.y + box.height + MARGEN) - y;
+          // Tope de alto (desde el borde superior del elemento): un main/body
+          // altísimo daría un PNG de varios MB que el callback del hub rechaza.
+          const h = Math.min(MAX_ALTO, Math.min(box.ph, box.y + box.height + MARGEN) - y);
           if (w > 0 && h > 0) {
             console.log(`Captura encuadrada en "${sel}".`);
             return await page.screenshot({
