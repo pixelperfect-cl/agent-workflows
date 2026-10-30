@@ -11,6 +11,7 @@ const {
   DISPATCH_ID,
   CALLBACK_URL,
   CALLBACK_SECRET,
+  SELECTOR,
 } = process.env;
 
 // Cierra popups/modales/banners de cookies best-effort ANTES de la foto: sin
@@ -92,6 +93,56 @@ async function dismissOverlays(page) {
   }
 }
 
+// Con SELECTOR y un elemento visible que lo cumple: scrollIntoView y captura de
+// su caja + 24 px de margen (clip dentro de la página). Sin selector, o si el
+// elemento no existe / no es visible / el selector es inválido: la primera
+// pantalla, como siempre.
+const MARGEN = 24;
+async function tomarCaptura(page) {
+  const sel = (SELECTOR || "").trim();
+  if (sel) {
+    try {
+      const el = await page.$(sel);
+      if (el) {
+        await el.evaluate((e) => e.scrollIntoView({ block: "center" }));
+        await new Promise((r) => setTimeout(r, 600));
+        const box = await el.evaluate((e) => {
+          const r = e.getBoundingClientRect();
+          const st = getComputedStyle(e);
+          if (r.width <= 0 || r.height <= 0 || st.visibility === "hidden" || st.display === "none") return null;
+          return {
+            x: r.left + window.scrollX,
+            y: r.top + window.scrollY,
+            width: r.width,
+            height: r.height,
+            pw: document.documentElement.scrollWidth,
+            ph: document.documentElement.scrollHeight,
+          };
+        });
+        if (box) {
+          const x = Math.max(0, box.x - MARGEN);
+          const y = Math.max(0, box.y - MARGEN);
+          const w = Math.min(box.pw, box.x + box.width + MARGEN) - x;
+          const h = Math.min(box.ph, box.y + box.height + MARGEN) - y;
+          if (w > 0 && h > 0) {
+            console.log(`Captura encuadrada en "${sel}".`);
+            return await page.screenshot({
+              type: "png",
+              clip: { x, y, width: w, height: h },
+              captureBeyondViewport: true,
+            });
+          }
+        }
+      }
+      console.log(`Selector "${sel}" sin elemento visible: primera pantalla.`);
+    } catch (err) {
+      console.log(`Selector "${sel}" falló (${err.message}): primera pantalla.`);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  }
+  return await page.screenshot({ type: "png", fullPage: false });
+}
+
 async function main() {
   if (!TARGET_URL || !CALLBACK_URL || !CALLBACK_SECRET) {
     throw new Error("Faltan variables de entorno (URL / callback / secret)");
@@ -108,7 +159,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1500));
     // Cerrar popups/cookies que taparían el sitio en la captura.
     await dismissOverlays(page);
-    const buf = await page.screenshot({ type: "png", fullPage: false });
+    const buf = await tomarCaptura(page);
     const imageBase64 = Buffer.from(buf).toString("base64");
 
     const res = await fetch(CALLBACK_URL, {

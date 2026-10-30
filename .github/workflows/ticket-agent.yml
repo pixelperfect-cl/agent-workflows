@@ -134,12 +134,33 @@ jobs:
           fi
           # Último mensaje del agente como resumen (best-effort: el formato del
           # execution_file puede cambiar entre versiones del action).
+          # >>> resumen
           SUMMARY=""
           if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
-            SUMMARY=$(jq -r '[.[] | select(.type == "assistant")] | last
+            FULL=$(jq -r '[.[] | select(.type == "assistant")] | last
               | .message.content[]? | select(.type == "text") | .text' \
-              "$EXECUTION_FILE" 2>/dev/null | head -c 3500 || true)
+              "$EXECUTION_FILE" 2>/dev/null || true)
+            # La línea final PIXELPERFECT_VERIFICACION no puede perderse en el
+            # recorte: si hay una o más, se queda la ÚLTIMA, el resto del texto
+            # se recorta a (3500 - largo de la línea - 1) bytes sin partir un
+            # carácter UTF-8 (iconv -c descarta la secuencia truncada del final)
+            # y la línea se pega al final. Sin la marca: head -c 3500, como antes.
+            LINE=$(printf '%s\n' "$FULL" | grep '^PIXELPERFECT_VERIFICACION ' | tail -n 1 || true)
+            if [ -n "$LINE" ]; then
+              LINE=$(printf '%s' "$LINE" | head -c 3400 | iconv -c -f UTF-8 -t UTF-8)
+              BUDGET=$((3500 - $(printf '%s' "$LINE" | wc -c) - 1))
+              BODY=$(printf '%s\n' "$FULL" | grep -v '^PIXELPERFECT_VERIFICACION ' \
+                | head -c "$BUDGET" | iconv -c -f UTF-8 -t UTF-8 || true)
+              if [ -n "$BODY" ]; then
+                SUMMARY="$BODY"$'\n'"$LINE"
+              else
+                SUMMARY="$LINE"
+              fi
+            else
+              SUMMARY=$(printf '%s' "$FULL" | head -c 3500 || true)
+            fi
           fi
+          # <<< resumen
           jq -n --arg event completed --arg ticketId "$TICKET_ID" \
                 --arg dispatchId "$DISPATCH_ID" --arg status "$STATUS" \
                 --arg branch "$BRANCH" --arg runUrl "$RUN_URL" \
